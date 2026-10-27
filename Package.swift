@@ -1,5 +1,4 @@
-// swift-tools-version:5.9
-// The swift-tools-version declares the minimum version of Swift required to build this package.
+// swift-tools-version:6.4
 
 import PackageDescription
 
@@ -10,19 +9,26 @@ let package = Package(
         .iOS(.v17)
     ],
     products: [
-        .library(
-            name: "Citadel",
-            targets: ["Citadel"]
-        ),
+        .library(name: "Citadel", targets: ["Citadel"])
     ],
     dependencies: [
-        // .package(path: "/Users/joannisorlandos/git/joannis/swift-nio-ssh"),
-        .package(url: "https://github.com/Wellz26/swift-nio-ssh.git", "0.3.4" ..< "0.4.0"),
-        .package(url: "https://github.com/apple/swift-nio.git", from: "2.81.0"),
-        .package(url: "https://github.com/apple/swift-log.git", from: "1.0.0"),
+        // https://github.com/apple/swift-nio-ssh
+        .package(url: "https://github.com/Wellz26/swift-nio-ssh.git", from: "0.15.1"),
+        
+        // https://github.com/apple/swift-nio.git
+        .package(url: "https://github.com/apple/swift-nio", from: "2.81.0"),
+        
+        // https://github.com/apple/swift-log.git
+        .package(url: "https://github.com/apple/swift-log", from: "1.0.0"),
+        
+        // https://github.com/TopScrech/BigInt
         .package(url: "https://github.com/TopScrech/BigInt", branch: "master"),
-        .package(url: "https://github.com/apple/swift-crypto.git", from: "3.12.3"),
-        .package(url: "https://github.com/mtynior/ColorizeSwift.git", from: "1.5.0"),
+        
+        // https://github.com/apple/swift-crypto.git
+        .package(url: "https://github.com/apple/swift-crypto", from: "3.12.3"),
+        
+        // https://github.com/mtynior/ColorizeSwift
+        .package(url: "https://github.com/mtynior/ColorizeSwift", from: "1.5.0")
     ],
     targets: [
         .target(name: "CCitadelBcrypt"),
@@ -35,7 +41,7 @@ let package = Package(
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "_CryptoExtras", package: "swift-crypto"),
                 .product(name: "BigInt", package: "BigInt"),
-                .product(name: "Logging", package: "swift-log"),
+                .product(name: "Logging", package: "swift-log")
             ]
         ),
         .executableTarget(
@@ -43,15 +49,16 @@ let package = Package(
             dependencies: [
                 "Citadel",
                 .product(name: "ColorizeSwift", package: "ColorizeSwift")
-            ]),
+            ]
+        ),
         .testTarget(
             name: "CitadelTests",
             dependencies: [
                 "Citadel",
                 .product(name: "NIOSSH", package: "swift-nio-ssh"),
                 .product(name: "BigInt", package: "BigInt"),
-                .product(name: "Logging", package: "swift-log"),
+                .product(name: "Logging", package: "swift-log")
             ]
-        ),
+        )
     ]
 )
