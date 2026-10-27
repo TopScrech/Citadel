@@ -7,9 +7,8 @@ import XCTest
 final class RSACompatibilityTests: XCTestCase {
     func testRSAHostKeyWithAES128CTR() async throws {
         let key = try Insecure.RSA.PrivateKey(sshRsa: TestRSAKey.openSSH)
-        let hostKey = NIOSSHPrivateKey(custom: key)
+        let hostKey = NIOSSHPrivateKey(rsaKey: key)
         var algorithms = SSHAlgorithms.all
-        algorithms.keyExchangeAlgorithms = nil
         algorithms.transportProtectionSchemes = .replace(with: [AES128CTR.self])
         let auth = AuthDelegate(supportedAuthenticationMethods: .password) { request, promise in
             if case .password(let password) = request.request,

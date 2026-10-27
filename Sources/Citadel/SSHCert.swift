@@ -4,6 +4,7 @@ import Foundation
 import Crypto
 import NIO
 import NIOSSH
+import _CryptoExtras
 
 public struct InvalidOpenSSHKey: Error {
     public enum UnsupportedFeature: String {
@@ -77,47 +78,35 @@ extension Curve25519.Signing.PrivateKey: OpenSSHPrivateKey {
 }
 
 extension Insecure.RSA.PublicKey: ByteBufferConvertible {
-    func write(to buffer: inout ByteBuffer) {
-        let _: Int = self.write(to: &buffer)
+    static func read(consuming buffer: inout ByteBuffer) throws -> Self {
+        guard let e = buffer.readSSHBuffer(), let n = buffer.readSSHBuffer() else {
+            throw InvalidOpenSSHKey.invalidLayout
+        }
+        return try Self(n: Data(n.readableBytesView), e: Data(e.readableBytesView))
+    }
+
+    func write(to buffer: inout ByteBuffer) -> Int {
+        guard let components = try? getKeyPrimitives() else {
+            preconditionFailure("A valid RSA key must expose its public components")
+        }
+        return buffer.writePositiveMPInt(components.publicExponent) + buffer.writePositiveMPInt(components.modulus)
     }
 }
 
 extension Insecure.RSA.PrivateKey: OpenSSHPrivateKey {
     typealias PublicKey = Insecure.RSA.PublicKey
-    
     static var publicKeyPrefix: String { "ssh-rsa" }
     static var privateKeyPrefix: String { "ssh-rsa" }
     static var keyType: OpenSSH.KeyType { .sshRSA }
-    
-    /// Creates a new Curve25519 private key from an OpenSSH private key string.
-    /// - Parameters:
-    ///  - key: The OpenSSH private key string.
-    /// - decryptionKey: The key to decrypt the private key with, if any.
-    public convenience init(sshRsa data: Data, decryptionKey: Data? = nil) throws {
-        if let string = String(data: data, encoding: .utf8) {
-            try self.init(sshRsa: string, decryptionKey: decryptionKey)
-        } else {
+
+    public init(sshRsa data: Data, decryptionKey: Data? = nil) throws {
+        guard let string = String(data: data, encoding: .utf8) else {
             throw InvalidOpenSSHKey.invalidUTF8String
         }
+        try self.init(sshRsa: string, decryptionKey: decryptionKey)
     }
-    
-    /// Creates a new Curve25519 private key from an OpenSSH private key string.
-    /// - Parameters:
-    ///  - key: The OpenSSH private key string.
-    /// - decryptionKey: The key to decrypt the private key with, if any.
-    public convenience init(sshRsa key: String, decryptionKey: Data? = nil) throws {
-        let privateKey = try OpenSSH.PrivateKey<Insecure.RSA.PrivateKey>.init(string: key, decryptionKey: decryptionKey).privateKey
-        let publicKey = privateKey.publicKey as! Insecure.RSA.PublicKey
-        
-        // Copy, so that our values stored in `privateKey` aren't freed when exciting the initializers scope
-        let modulus = CCryptoBoringSSL_BN_new()!
-        let publicExponent = CCryptoBoringSSL_BN_new()!
-        let privateExponent = CCryptoBoringSSL_BN_new()!
-        
-        CCryptoBoringSSL_BN_copy(modulus, publicKey.modulus)
-        CCryptoBoringSSL_BN_copy(publicExponent, publicKey.publicExponent)
-        CCryptoBoringSSL_BN_copy(privateExponent, privateKey.privateExponent)
-        
-        self.init(privateExponent: privateExponent, publicExponent: publicExponent, modulus: modulus)
+
+    public init(sshRsa key: String, decryptionKey: Data? = nil) throws {
+        self = try OpenSSH.PrivateKey<Self>(string: key, decryptionKey: decryptionKey).privateKey
     }
 }

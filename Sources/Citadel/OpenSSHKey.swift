@@ -5,6 +5,7 @@ import NIO
 import Crypto
 import CCitadelBcrypt
 import NIOSSH
+import _CryptoExtras
 
 // Noteable links:
 // https://dnaeon.github.io/openssh-private-key-binary-format/
@@ -24,33 +25,16 @@ protocol OpenSSHPrivateKey: ByteBufferConvertible {
 
 extension Insecure.RSA.PrivateKey: ByteBufferConvertible {
     static func read(consuming buffer: inout ByteBuffer) throws -> Self {
-        guard
-            let nBytesLength = buffer.readInteger(as: UInt32.self),
-            let nBytes = buffer.readBytes(length: Int(nBytesLength)),
-            let eBytesLength = buffer.readInteger(as: UInt32.self),
-            let eBytes = buffer.readBytes(length: Int(eBytesLength)),
-            let dLength = buffer.readInteger(as: UInt32.self),
-            let dBytes = buffer.readBytes(length: Int(dLength)),
-            let iqmpLength = buffer.readInteger(as: UInt32.self),
-            let _ = buffer.readData(length: Int(iqmpLength)),
-            let pLength = buffer.readInteger(as: UInt32.self),
-            let _ = buffer.readData(length: Int(pLength)),
-            let qLength = buffer.readInteger(as: UInt32.self),
-            let _ = buffer.readData(length: Int(qLength))
-        else {
+        guard let n = buffer.readSSHBuffer(), let e = buffer.readSSHBuffer(),
+            let d = buffer.readSSHBuffer(), let _ = buffer.readSSHBuffer(),
+            let p = buffer.readSSHBuffer(), let q = buffer.readSSHBuffer() else {
             throw InvalidOpenSSHKey.invalidLayout
         }
-        
-        let privateExponent = CCryptoBoringSSL_BN_bin2bn(dBytes, dBytes.count, nil)!
-        let publicExponent = CCryptoBoringSSL_BN_bin2bn(eBytes, eBytes.count, nil)!
-        let modulus = CCryptoBoringSSL_BN_bin2bn(nBytes, nBytes.count, nil)!
+        return try Self(n: Data(n.readableBytesView), e: Data(e.readableBytesView),
+                        d: Data(d.readableBytesView), p: Data(p.readableBytesView), q: Data(q.readableBytesView))
+    }
 
-        return self.init(privateExponent: privateExponent, publicExponent: publicExponent, modulus: modulus)
-    }
-    
-    func write(to buffer: inout ByteBuffer) -> Int {
-        0
-    }
+    func write(to buffer: inout ByteBuffer) -> Int { 0 }
 }
 
 extension Curve25519.Signing.PrivateKey: ByteBufferConvertible {

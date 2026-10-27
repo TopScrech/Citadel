@@ -38,8 +38,8 @@ public final class SSHAuthenticationMethod: NIOSSHClientUserAuthenticationDelega
     /// - Parameters: 
     /// - username: The username to authenticate with.
     /// - privateKey: The private key to authenticate with.
-    public static func rsa(username: String, privateKey: Insecure.RSA.PrivateKey) -> SSHAuthenticationMethod {
-        return SSHAuthenticationMethod(username: username, offer: .privateKey(.init(privateKey: .init(custom: privateKey))))
+    public static func rsa(username: String, privateKey: Insecure.RSA.PrivateKey, signatureAlgorithm: RSASignatureAlgorithm = .sha512) -> SSHAuthenticationMethod {
+        return SSHAuthenticationMethod(username: username, offer: .privateKey(.init(privateKey: .init(rsaKey: privateKey), rsaSignatureAlgorithm: signatureAlgorithm)))
     }
     
     /// Creates a public key based authentication method.

@@ -66,7 +66,7 @@ final class SubsystemHandler: ChannelDuplexHandler {
             }
             
             parent.eventLoop.makeCompletedFuture {
-                try parent.pipeline.syncOperations.handler(type: NIOSSHHandler.self).username
+                try parent.pipeline.syncOperations.handler(type: ServerAuthenticationHandler.self).username
             }.flatMap { username in
                 ShellServerSubsystem.setupChannelHanders(
                     channel: boundContext.value.channel,
@@ -92,7 +92,7 @@ final class SubsystemHandler: ChannelDuplexHandler {
                 }
                 
                 parent.eventLoop.makeCompletedFuture {
-                    try parent.pipeline.syncOperations.handler(type: NIOSSHHandler.self).username
+                    try parent.pipeline.syncOperations.handler(type: ServerAuthenticationHandler.self).username
                 }.flatMap { username in
                     SFTPServerSubsystem.setupChannelHanders(
                         channel: boundContext.value.channel,
@@ -133,7 +133,7 @@ final class SubsystemHandler: ChannelDuplexHandler {
     }
 }
 
-final class CitadelServerDelegate: Sendable, GlobalRequestDelegate {
+final class CitadelServerDelegate: Sendable {
     let _sftp = NIOLockedValueBox<SFTPDelegate?>(nil)
     let _exec = NIOLockedValueBox<ExecDelegate?>(nil)
     let _shell = NIOLockedValueBox<ShellDelegate?>(nil)
@@ -197,14 +197,15 @@ final class CitadelServerDelegate: Sendable, GlobalRequestDelegate {
     func tcpForwardingRequest(
         _ request: GlobalRequest.TCPForwardingRequest,
         handler: NIOSSHHandler,
-        promise: EventLoopPromise<GlobalRequest.TCPForwardingResponse>
+        promise: EventLoopPromise<GlobalRequest.TCPForwardingResponse>,
+        username: String?
     ) {
         guard let delegate = remotePortForward else {
             promise.fail(CitadelError.unsupported)
             return
         }
 
-        let context = SSHContext(username: handler.username)
+        let context = SSHContext(username: username)
 
         switch request {
         case .listen(let host, let port):
@@ -308,7 +309,7 @@ public final class SSHServer: Sendable {
         algorithms: SSHAlgorithms = SSHAlgorithms(),
         protocolOptions: Set<SSHProtocolOption> = [],
         logger: Logger = Logger(label: "nl.orlandos.citadel.server"),
-        authenticationDelegate: NIOSSHServerUserAuthenticationDelegate,
+        authenticationDelegate: any NIOSSHServerUserAuthenticationDelegate & Sendable,
         group: MultiThreadedEventLoopGroup = .init(numberOfThreads: 1)
     ) async throws -> SSHServer {
         let delegate = CitadelServerDelegate()
@@ -317,10 +318,11 @@ public final class SSHServer: Sendable {
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { channel in
+                let authentication = ServerAuthenticationHandler(delegate: authenticationDelegate, serverDelegate: delegate)
                 var server = SSHServerConfiguration(
                     hostKeys: hostKeys,
-                    userAuthDelegate: authenticationDelegate,
-                    globalRequestDelegate: delegate
+                    userAuthDelegate: authentication,
+                    globalRequestDelegate: authentication
                 )
                 
                 algorithms.apply(to: &server)
@@ -338,12 +340,13 @@ public final class SSHServer: Sendable {
                             allocator: channel.allocator,
                             inboundChildChannelInitializer: { childChannel, channelType in
                                 channel.eventLoop.makeCompletedFuture {
-                                    try channel.pipeline.syncOperations.handler(type: NIOSSHHandler.self).username
+                                    try channel.pipeline.syncOperations.handler(type: ServerAuthenticationHandler.self).username
                                 }.flatMap { username in
                                     delegate.initializeSshChildChannel(childChannel, channelType, username: username)
                                 }
                             }
                         ),
+                        authentication,
                         CloseErrorHandler(logger: logger)
                     ])
                 }

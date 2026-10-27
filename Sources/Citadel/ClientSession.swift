@@ -292,10 +292,10 @@ public struct InvalidHostKey: Error, Equatable {}
 
 /// A host key validator that can be used to validate an SSH host key. This can be used to validate the host key against a set of trusted keys, or to accept any key.
 public struct SSHHostKeyValidator: NIOSSHClientServerAuthenticationDelegate, Sendable {
-    private enum Method {
+    private enum Method: Sendable {
         case trustedKeys(Set<NIOSSHPublicKey>)
         case acceptAnything
-        case custom(NIOSSHClientServerAuthenticationDelegate)
+        case custom(any NIOSSHClientServerAuthenticationDelegate & Sendable)
     }
     
     private let method: Method
@@ -327,7 +327,7 @@ public struct SSHHostKeyValidator: NIOSSHClientServerAuthenticationDelegate, Sen
     }
     
     /// Creates a new host key validator that will use the given custom validator. This can be used to implement custom host key validation logic.
-    public static func custom(_ validator: NIOSSHClientServerAuthenticationDelegate) -> SSHHostKeyValidator {
+    public static func custom(_ validator: any NIOSSHClientServerAuthenticationDelegate & Sendable) -> SSHHostKeyValidator {
         SSHHostKeyValidator(method: .custom(validator))
     }
 }
