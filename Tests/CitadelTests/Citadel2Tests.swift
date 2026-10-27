@@ -8,7 +8,7 @@ import NIOSSH
 
 final class Citadel2Tests: XCTestCase {
     func withDisconnectTest(perform: (SSHServer, SSHClient) async throws -> ()) async throws {
-        struct AuthDelegate: NIOSSHServerUserAuthenticationDelegate {
+        struct AuthDelegate: NIOSSHServerUserAuthenticationDelegate, Sendable {
             let password: String
             
             var supportedAuthenticationMethods: NIOSSHAvailableUserAuthenticationMethods {
@@ -170,7 +170,7 @@ final class Citadel2Tests: XCTestCase {
             }
         }
         
-        struct AuthDelegate: NIOSSHServerUserAuthenticationDelegate {
+        struct AuthDelegate: NIOSSHServerUserAuthenticationDelegate, Sendable {
             let supportedKey: NIOSSHPublicKey
             
             let supportedAuthenticationMethods: NIOSSHAvailableUserAuthenticationMethods = [.publicKey]

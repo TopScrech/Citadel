@@ -12,8 +12,8 @@ let package = Package(
         .library(name: "Citadel", targets: ["Citadel"])
     ],
     dependencies: [
-        // https://github.com/Wellz26/swift-nio-ssh
-        .package(url: "https://github.com/Wellz26/swift-nio-ssh", "0.3.7"..<"0.4.0"),
+        // https://github.com/TopScrech/swift-nio-ssh
+        .package(url: "https://github.com/TopScrech/swift-nio-ssh", branch: "main"),
         
         // https://github.com/apple/swift-nio.git
         .package(url: "https://github.com/apple/swift-nio", from: "2.81.0"),
@@ -25,7 +25,7 @@ let package = Package(
         .package(url: "https://github.com/TopScrech/BigInt", branch: "master"),
         
         // https://github.com/apple/swift-crypto.git
-        .package(url: "https://github.com/apple/swift-crypto", from: "3.12.3"),
+        .package(url: "https://github.com/apple/swift-crypto", from: "5.0.3"),
         
         // https://github.com/mtynior/ColorizeSwift
         .package(url: "https://github.com/mtynior/ColorizeSwift", from: "1.5.0")
