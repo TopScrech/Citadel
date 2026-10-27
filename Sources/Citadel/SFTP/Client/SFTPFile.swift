@@ -1,16 +1,19 @@
 import NIO
+import NIOConcurrencyHelpers
 import Logging
 
 /// A "handle" for accessing a file that has been successfully opened on an SFTP server. File handles support
 /// reading (if opened with read access) and writing/appending (if opened with write/append access).
-public final class SFTPFile {
+public final class SFTPFile: Sendable {
     /// A typealias to clarify when a buffer is being used as a file handle.
     ///
     /// This should probably be a `struct` wrapping a buffer for stronger type safety.
     public typealias SFTPFileHandle = ByteBuffer
     
     /// Indicates whether the file's handle was still valid at the time the getter was called.
-    public private(set) var isActive: Bool
+    private let active = NIOLockedValueBox(true)
+
+    public var isActive: Bool { active.withLockedValue { $0 } }
     
     /// The raw buffer whose contents are were contained in the `.handle()` result from the SFTP server.
     /// Used for performing operations on the open file.
@@ -30,7 +33,6 @@ public final class SFTPFile {
     ///
     /// Do not create instances of `SFTPFile` yourself; use `SFTPClient.openFile()`.
     internal init(client: SFTPClient, path: String, handle: SFTPFileHandle) {
-        self.isActive = true
         self.handle = handle
         self.client = client
         self.path = path
@@ -254,14 +256,15 @@ public final class SFTPFile {
     ///
     /// - Throws: SFTPError if close fails
     public func close() async throws -> Void {
-        guard self.isActive else {
-            // Don't blow up if close is called on an invalid handle; it's too easy for it to happen by accident.
-            return
+        let shouldClose = active.withLockedValue { isActive in
+            guard isActive else { return false }
+            isActive = false
+            return true
         }
+        guard shouldClose else { return }
         
         self.logger.debug("SFTP closing and invalidating file \(self.handle.sftpHandleDebugDescription)")
         
-        self.isActive = false
         let result = try await self.client.sendRequest(.closeFile(.init(requestId: self.client.allocateRequestId(), handle: self.handle)))
         
         guard case .status(let status) = result else {
