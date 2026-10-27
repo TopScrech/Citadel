@@ -38,20 +38,21 @@ public final class SFTPClient: Sendable {
     }
     
     fileprivate static func setupChannelHanders(channel: Channel, logger: Logger) -> EventLoopFuture<SFTPClient> {
-        let responses = SFTPResponses(sftpVersion: channel.eventLoop.makePromise())
-        
-        let deserializeHandler = ByteToMessageHandler(SFTPMessageParser())
-        let serializeHandler = MessageToByteHandler(SFTPMessageSerializer())
-        let sftpInboundHandler = SFTPClientInboundHandler(responses: responses, logger: logger)
-        
-        return channel.pipeline.addHandlers(
-            SSHChannelDataUnwrapper(),
-            SSHOutboundChannelDataWrapper(),
-            deserializeHandler,
-            serializeHandler,
-            sftpInboundHandler,
-            CloseErrorHandler(logger: logger)
-        ).map {
+        channel.eventLoop.submit {
+            let responses = SFTPResponses(sftpVersion: channel.eventLoop.makePromise())
+
+            let deserializeHandler = ByteToMessageHandler(SFTPMessageParser())
+            let serializeHandler = MessageToByteHandler(SFTPMessageSerializer())
+            let sftpInboundHandler = SFTPClientInboundHandler(responses: responses, logger: logger)
+
+            try channel.pipeline.syncOperations.addHandlers(
+                SSHChannelDataUnwrapper(),
+                SSHOutboundChannelDataWrapper(),
+                deserializeHandler,
+                serializeHandler,
+                sftpInboundHandler,
+                CloseErrorHandler(logger: logger)
+            )
             let client = SFTPClient(channel: channel, responses: responses, logger: logger)
 
             client.channel.closeFuture.whenComplete { _ in
@@ -62,7 +63,7 @@ public final class SFTPClient: Sendable {
             return client
         }
     }
-    
+
     /// True if the SFTP connection is still open, false otherwise.
     public var isActive: Bool {
         self.channel.isActive

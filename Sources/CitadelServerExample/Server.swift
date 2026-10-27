@@ -73,9 +73,9 @@ struct LoginHandler: NIOSSHServerUserAuthenticationDelegate {
         responsePromise: EventLoopPromise<NIOSSHUserAuthenticationOutcome>
     ) {
         if case .password(.init(password: password)) = request.request, request.username == username {
-            return responsePromise.succeed(.success)
+            return responsePromise.assumeIsolated().succeed(.success)
         }
         
-        return responsePromise.succeed(.failure)
+        return responsePromise.assumeIsolated().succeed(.failure)
     }
 }

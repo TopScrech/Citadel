@@ -36,8 +36,9 @@ final class SubsystemHandler: ChannelDuplexHandler {
     }
     
     func handlerAdded(context: ChannelHandlerContext) {
-        context.channel.setOption(ChannelOptions.allowRemoteHalfClosure, value: true).whenFailure { error in
-            context.fireErrorCaught(error)
+        let boundContext = NIOLoopBound(context, eventLoop: context.eventLoop)
+        boundContext.value.channel.setOption(ChannelOptions.allowRemoteHalfClosure, value: true).whenFailure { error in
+            boundContext.value.fireErrorCaught(error)
         }
     }
     
@@ -50,68 +51,76 @@ final class SubsystemHandler: ChannelDuplexHandler {
     }
     
     func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+        let boundContext = NIOLoopBound(context, eventLoop: context.eventLoop)
+        let boundSelf = NIOLoopBound(self, eventLoop: context.eventLoop)
         switch event {
         case let event as SSHChannelRequestEvent.ExecRequest:
-            context.fireUserInboundEventTriggered(event)
+            boundContext.value.fireUserInboundEventTriggered(event)
         case is SSHChannelRequestEvent.ShellRequest:
-            guard let shell = shell, let parent = context.channel.parent else {
-                _ = context.channel.triggerUserOutboundEvent(ChannelFailureEvent()).flatMap {
-                    self.configured.succeed(())
-                    return context.channel.close()
+            guard let shell = shell, let parent = boundContext.value.channel.parent else {
+                _ = boundContext.value.channel.triggerUserOutboundEvent(ChannelFailureEvent()).flatMap {
+                    boundSelf.value.configured.succeed(())
+                    return boundContext.value.channel.close()
                 }
                 return
             }
             
-            parent.pipeline.handler(type: NIOSSHHandler.self).flatMap { handler in
+            parent.eventLoop.makeCompletedFuture {
+                try parent.pipeline.syncOperations.handler(type: NIOSSHHandler.self).username
+            }.flatMap { username in
                 ShellServerSubsystem.setupChannelHanders(
-                    channel: context.channel,
+                    channel: boundContext.value.channel,
                     shell: shell,
                     logger: .init(label: "nl.orlandos.citadel.sftp-server"),
-                    username: handler.username
+                    username: username
                 )
             }.flatMap { () -> EventLoopFuture<Void> in
-                let promise = context.eventLoop.makePromise(of: Void.self)
-                context.channel.triggerUserOutboundEvent(ChannelSuccessEvent(), promise: promise)
-                self.configured.succeed(())
+                let promise = boundContext.value.eventLoop.makePromise(of: Void.self)
+                boundContext.value.channel.triggerUserOutboundEvent(ChannelSuccessEvent(), promise: promise)
+                boundSelf.value.configured.succeed(())
                 return promise.futureResult
             }.whenFailure { _ in
-                context.channel.triggerUserOutboundEvent(ChannelFailureEvent(), promise: nil)
+                boundContext.value.channel.triggerUserOutboundEvent(ChannelFailureEvent(), promise: nil)
             }
         case let event as SSHChannelRequestEvent.SubsystemRequest:
             switch event.subsystem {
             case "sftp":
-                guard let sftp = sftp, let parent = context.channel.parent else {
-                    context.channel.close(promise: nil)
-                    self.configured.succeed(())
+                guard let sftp = sftp, let parent = boundContext.value.channel.parent else {
+                    boundContext.value.channel.close(promise: nil)
+                    boundSelf.value.configured.succeed(())
                     return
                 }
                 
-                parent.pipeline.handler(type: NIOSSHHandler.self).flatMap { handler in
+                parent.eventLoop.makeCompletedFuture {
+                    try parent.pipeline.syncOperations.handler(type: NIOSSHHandler.self).username
+                }.flatMap { username in
                     SFTPServerSubsystem.setupChannelHanders(
-                        channel: context.channel,
+                        channel: boundContext.value.channel,
                         sftp: sftp,
                         logger: .init(label: "nl.orlandos.citadel.sftp-server"),
-                        username: handler.username
+                        username: username
                     )
                 }.flatMap { () -> EventLoopFuture<Void> in
-                    let promise = context.eventLoop.makePromise(of: Void.self)
-                    context.channel.triggerUserOutboundEvent(ChannelSuccessEvent(), promise: promise)
-                    self.configured.succeed(())
+                    let promise = boundContext.value.eventLoop.makePromise(of: Void.self)
+                    boundContext.value.channel.triggerUserOutboundEvent(ChannelSuccessEvent(), promise: promise)
+                    boundSelf.value.configured.succeed(())
                     return promise.futureResult
                 }.whenFailure { _ in
-                    context.channel.triggerUserOutboundEvent(ChannelFailureEvent(), promise: nil)
+                    boundContext.value.channel.triggerUserOutboundEvent(ChannelFailureEvent(), promise: nil)
                 }
             default:
-                context.fireUserInboundEventTriggered(event)
+                boundContext.value.fireUserInboundEventTriggered(event)
             }
         default:
-            context.fireUserInboundEventTriggered(event)
+            boundContext.value.fireUserInboundEventTriggered(event)
         }
     }
     
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        let boundContext = NIOLoopBound(context, eventLoop: context.eventLoop)
+        let boundData = NIOLoopBound(data, eventLoop: context.eventLoop)
         configured.futureResult.whenSuccess {
-            context.fireChannelRead(data)
+            boundContext.value.fireChannelRead(boundData.value)
         }
     }
     
@@ -165,7 +174,9 @@ final class CitadelServerDelegate: Sendable, GlobalRequestDelegate {
             
             handlers.append(ExecHandler(delegate: exec, username: username))
             
-            return channel.pipeline.addHandlers(handlers)
+            return channel.eventLoop.makeCompletedFuture {
+                try channel.pipeline.syncOperations.addHandlers(handlers)
+            }
         case .directTCPIP(let request):
             guard let delegate = directTCPIP else {
                 return channel.eventLoop.makeFailedFuture(CitadelError.unsupported)
@@ -237,8 +248,8 @@ final class CitadelServerDelegate: Sendable, GlobalRequestDelegate {
 /// An SSH Server implementation.
 /// This class is used to start an SSH server on a specified host and port.
 /// The server can be closed using the `close()` method.
-/// - Note: This class is not thread safe.
-public final class SSHServer {
+/// Delegate configuration is protected by locks.
+public final class SSHServer: Sendable {
     let channel: Channel
     let delegate: CitadelServerDelegate
     let logger: Logger
@@ -320,18 +331,22 @@ public final class SSHServer {
                     option.apply(to: &server)
                 }
                 
-                return channel.pipeline.addHandlers([
-                    NIOSSHHandler(
-                        role: .server(server),
-                        allocator: channel.allocator,
-                        inboundChildChannelInitializer: { childChannel, channelType in
-                            channel.pipeline.handler(type: NIOSSHHandler.self).flatMap { handler in
-                                delegate.initializeSshChildChannel(childChannel, channelType, username: handler.username)
+                return channel.eventLoop.makeCompletedFuture {
+                    try channel.pipeline.syncOperations.addHandlers([
+                        NIOSSHHandler(
+                            role: .server(server),
+                            allocator: channel.allocator,
+                            inboundChildChannelInitializer: { childChannel, channelType in
+                                channel.eventLoop.makeCompletedFuture {
+                                    try channel.pipeline.syncOperations.handler(type: NIOSSHHandler.self).username
+                                }.flatMap { username in
+                                    delegate.initializeSshChildChannel(childChannel, channelType, username: username)
+                                }
                             }
-                        }
-                    ),
-                    CloseErrorHandler(logger: logger)
-                ])
+                        ),
+                        CloseErrorHandler(logger: logger)
+                    ])
+                }
             }
             .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
             .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(IPPROTO_TCP), TCP_NODELAY), value: 1)

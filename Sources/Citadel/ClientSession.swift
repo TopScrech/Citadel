@@ -133,6 +133,23 @@ final class SSHClientSession: Sendable {
         self.sshHandler = NIOLoopBoundBox(sshHandler, eventLoop: channel.eventLoop)
     }
     
+    static func authenticatedSession(
+        on channel: Channel,
+        inboundChannelHandler: SSHClientInboundChannelHandler
+    ) -> EventLoopFuture<SSHClientSession> {
+        channel.eventLoop.flatSubmit {
+            do {
+                let handshake = try channel.pipeline.syncOperations.handler(type: ClientHandshakeHandler.self)
+                return handshake.authenticated.flatMapThrowing {
+                    let handler = try channel.pipeline.syncOperations.handler(type: NIOSSHHandler.self)
+                    return SSHClientSession(channel: channel, inboundChannelHandler: inboundChannelHandler, sshHandler: handler)
+                }
+            } catch {
+                return channel.eventLoop.makeFailedFuture(error)
+            }
+        }
+    }
+
     /// Creates a new SSH session on the given channel. This allows you to use an existing channel for the SSH session.
     /// - authenticationMethod: The authentication method to use, see `SSHAuthenticationMethod`.
     /// - hostKeyValidator: The host key validator to use, see `SSHHostKeyValidator`.
@@ -226,13 +243,7 @@ final class SSHClientSession: Sendable {
         .channelOption(ChannelOptions.socket(SocketOptionLevel(IPPROTO_TCP), TCP_NODELAY), value: 1)
         
         return try await bootstrap.connect(host: settings.host, port: settings.port).flatMap { channel in
-            channel.pipeline.handler(type: ClientHandshakeHandler.self).flatMap { handshakeHandler in
-                handshakeHandler.authenticated
-            }.flatMap {
-                channel.pipeline.handler(type: NIOSSHHandler.self)
-            }.map { sshHandler in
-                SSHClientSession(channel: channel, inboundChannelHandler: inboundChannelHandler, sshHandler: sshHandler)
-            }
+            authenticatedSession(on: channel, inboundChannelHandler: inboundChannelHandler)
         }.get()
     }
     
@@ -255,7 +266,7 @@ final class SSHClientSession: Sendable {
         algorithms: SSHAlgorithms = SSHAlgorithms(),
         protocolOptions: Set<SSHProtocolOption> = [],
         group: EventLoopGroup = MultiThreadedEventLoopGroup.singleton,
-        channelHandlers: [ChannelHandler] = [],
+        channelHandlers: [ChannelHandler & Sendable] = [],
         connectTimeout: TimeAmount = .seconds(30)
     ) async throws -> SSHClientSession {
         var settings = SSHClientSettings(

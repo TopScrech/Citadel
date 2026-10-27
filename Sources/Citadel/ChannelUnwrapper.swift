@@ -6,8 +6,9 @@ final class SSHChannelDataUnwrapper: ChannelInboundHandler {
     typealias InboundOut = ByteBuffer
 
     func handlerAdded(context: ChannelHandlerContext) {
+        let boundContext = NIOLoopBound(context, eventLoop: context.eventLoop)
         context.channel.setOption(ChannelOptions.allowRemoteHalfClosure, value: true).whenFailure { error in
-            context.fireErrorCaught(error)
+            boundContext.value.fireErrorCaught(error)
         }
     }
 

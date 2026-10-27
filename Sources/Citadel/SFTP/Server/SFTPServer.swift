@@ -4,7 +4,7 @@ import NIOSSH
 import Logging
 
 /// Represents a file in the SFTP subsystem.
-public protocol SFTPFileHandle {
+public protocol SFTPFileHandle: Sendable {
     /// Reads data from the file. The length of the data read is determined by the length parameter. The data is read from the given offset in the file.
     func read(at offset: UInt64, length: UInt32) async throws -> ByteBuffer
 
@@ -22,18 +22,18 @@ public protocol SFTPFileHandle {
 }
 
 /// Represents a file listing in a directory.
-public protocol SFTPDirectoryHandle {
+public protocol SFTPDirectoryHandle: Sendable {
     func listFiles(context: SSHContext) async throws -> [SFTPFileListing]
 }
 
 /// The context for the current SSH connection. This is passed to the delegate for each operation.
-public struct SSHContext {
+public struct SSHContext: Sendable {
     /// The username of the user that is connected to the SSH server.
     public let username: String?
 }
 
-public struct SSHShellContext {
-    public struct WindowSize {
+public struct SSHShellContext: Sendable {
+    public struct WindowSize: Sendable {
         public let columns: Int
         public let rows: Int
     }
@@ -58,7 +58,7 @@ public protocol SFTPDelegate: Sendable {
 
     /// Opens a file at the given path with the given attributes and flags. This is equivalent to the `open()` system call.
     func openFile(_ filePath: String, withAttributes: SFTPFileAttributes, flags: SFTPOpenFileFlags, context: SSHContext) async throws -> SFTPFileHandle
-    
+
     /// Removes the file at the given path. This is equivalent to the `unlink()` system call.
     func removeFile(_ filePath: String, context: SSHContext) async throws -> SFTPStatusCode
 
@@ -95,22 +95,24 @@ enum SFTPServerSubsystem {
         logger: Logger,
         username: String?
     ) -> EventLoopFuture<Void> {
-        let deserializeHandler = ByteToMessageHandler(SFTPMessageParser())
-        let serializeHandler = MessageToByteHandler(SFTPMessageSerializer())
-        let sftpInboundHandler = SFTPServerInboundHandler(
-            logger: logger,
-            delegate: sftp,
-            eventLoop: channel.eventLoop,
-            username: username
-        )
-        
-        return channel.pipeline.addHandlers(
-            SSHChannelDataUnwrapper(),
-            SSHOutboundChannelDataWrapper(),
-            deserializeHandler,
-            serializeHandler,
-            sftpInboundHandler,
-            CloseErrorHandler(logger: logger)
-        )
+        channel.eventLoop.submit {
+            let deserializeHandler = ByteToMessageHandler(SFTPMessageParser())
+            let serializeHandler = MessageToByteHandler(SFTPMessageSerializer())
+            let sftpInboundHandler = SFTPServerInboundHandler(
+                logger: logger,
+                delegate: sftp,
+                eventLoop: channel.eventLoop,
+                username: username
+            )
+
+            try channel.pipeline.syncOperations.addHandlers(
+                SSHChannelDataUnwrapper(),
+                SSHOutboundChannelDataWrapper(),
+                deserializeHandler,
+                serializeHandler,
+                sftpInboundHandler,
+                CloseErrorHandler(logger: logger)
+            )
+        }
     }
 }

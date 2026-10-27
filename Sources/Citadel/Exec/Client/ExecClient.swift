@@ -30,8 +30,9 @@ final class TTYHandler: ChannelDuplexHandler {
     }
     
     func handlerAdded(context: ChannelHandlerContext) {
+        let boundContext = NIOLoopBound(context, eventLoop: context.eventLoop)
         context.channel.setOption(ChannelOptions.allowRemoteHalfClosure, value: true).whenFailure { error in
-            context.fireErrorCaught(error)
+            boundContext.value.fireErrorCaught(error)
         }
     }
 
@@ -115,12 +116,14 @@ extension SSHClient {
             channel = try await eventLoop.flatSubmit { [eventLoop, sshHandler = session.sshHandler] in
                 let createChannel = eventLoop.makePromise(of: Channel.self)
                 sshHandler.value.createChannel(createChannel) { channel, _ in
-                    channel.pipeline.addHandlers(
-                        TTYHandler(
-                            maxResponseSize: maxResponseSize,
-                            done: promise
+                    channel.eventLoop.makeCompletedFuture {
+                        try channel.pipeline.syncOperations.addHandlers(
+                            TTYHandler(
+                                maxResponseSize: maxResponseSize,
+                                done: promise
+                            )
                         )
-                    )
+                    }
                 }
                 
                 eventLoop.scheduleTask(in: .seconds(15)) {

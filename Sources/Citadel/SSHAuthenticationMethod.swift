@@ -1,30 +1,29 @@
 import NIO
+import NIOConcurrencyHelpers
 import NIOSSH
 import Crypto
 
 /// Represents an authentication method.
-public final class SSHAuthenticationMethod: NIOSSHClientUserAuthenticationDelegate {
+public final class SSHAuthenticationMethod: NIOSSHClientUserAuthenticationDelegate, @unchecked Sendable {
     private enum Implementation {
-        case custom(NIOSSHClientUserAuthenticationDelegate)
+        case custom(any NIOSSHClientUserAuthenticationDelegate & Sendable)
         case user(String, offer: NIOSSHUserAuthenticationOffer.Offer)
     }
     
-    private let allImplementations: [Implementation]
-    private var implementations: [Implementation]
+    // The lock protects consumption of authentication offers, each used only once
+    private let implementations: NIOLockedValueBox<[Implementation]>
     
     internal init(
         username: String,
         offer: NIOSSHUserAuthenticationOffer.Offer
     ) {
-        self.allImplementations = [.user(username, offer: offer)]
-        self.implementations = allImplementations
+        self.implementations = NIOLockedValueBox([.user(username, offer: offer)])
     }
     
     internal init(
-        custom: NIOSSHClientUserAuthenticationDelegate
+        custom: any NIOSSHClientUserAuthenticationDelegate & Sendable
     ) {
-        self.allImplementations = [.custom(custom)]
-        self.implementations = allImplementations
+        self.implementations = NIOLockedValueBox([.custom(custom)])
     }
     
     /// Creates a password based authentication method.
@@ -75,7 +74,7 @@ public final class SSHAuthenticationMethod: NIOSSHClientUserAuthenticationDelega
         return SSHAuthenticationMethod(username: username, offer: .privateKey(.init(privateKey: .init(p521Key: privateKey))))
     }
     
-    public static func custom(_ auth: NIOSSHClientUserAuthenticationDelegate) -> SSHAuthenticationMethod {
+    public static func custom(_ auth: any NIOSSHClientUserAuthenticationDelegate & Sendable) -> SSHAuthenticationMethod {
         return SSHAuthenticationMethod(custom: auth)
     }
     
@@ -83,12 +82,13 @@ public final class SSHAuthenticationMethod: NIOSSHClientUserAuthenticationDelega
         availableMethods: NIOSSHAvailableUserAuthenticationMethods,
         nextChallengePromise: EventLoopPromise<NIOSSHUserAuthenticationOffer?>
     ) {
-        if implementations.isEmpty {
+        let implementation = implementations.withLockedValue { methods in
+            methods.isEmpty ? nil : methods.removeFirst()
+        }
+        guard let implementation else {
             nextChallengePromise.fail(SSHClientError.allAuthenticationOptionsFailed)
             return
         }
-        
-        let implementation = implementations.removeFirst()
 
         switch implementation {
         case .user(let username, offer: let offer):
@@ -112,7 +112,7 @@ public final class SSHAuthenticationMethod: NIOSSHClientUserAuthenticationDelega
                 ()
             }
             
-            nextChallengePromise.succeed(NIOSSHUserAuthenticationOffer(username: username, serviceName: "", offer: offer))
+            nextChallengePromise.assumeIsolated().succeed(NIOSSHUserAuthenticationOffer(username: username, serviceName: "", offer: offer))
         case .custom(let implementation):
             implementation.nextAuthenticationType(availableMethods: availableMethods, nextChallengePromise: nextChallengePromise)
         }

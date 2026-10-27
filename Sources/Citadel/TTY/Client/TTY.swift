@@ -11,7 +11,7 @@ public struct TTYSTDError: Error {
 }
 
 /// A pair of streams representing the stdout and stderr output of an executed command
-public struct ExecCommandStream {
+public struct ExecCommandStream: Sendable {
     /// An async stream of bytes representing the standard output
     public let stdout: AsyncThrowingStream<ByteBuffer, Error>
     /// An async stream of bytes representing the standard error
@@ -44,7 +44,7 @@ public struct ExecCommandStream {
 }
 
 /// Represents the output from an executed command, either stdout or stderr data
-public enum ExecCommandOutput {
+public enum ExecCommandOutput: Sendable {
     /// Standard output data as a byte buffer
     case stdout(ByteBuffer)
     /// Standard error data as a byte buffer 
@@ -53,7 +53,7 @@ public enum ExecCommandOutput {
 
 /// An async sequence that provides TTY output data
 @available(macOS 15.0, *)
-public struct TTYOutput: AsyncSequence {
+public struct TTYOutput: AsyncSequence, Sendable {
     internal let sequence: AsyncThrowingStream<ExecCommandOutput, Error>
     public typealias Element = ExecCommandOutput
 
@@ -72,7 +72,7 @@ public struct TTYOutput: AsyncSequence {
 }
 
 /// Allows writing data to a TTY's standard input and controlling terminal properties
-public struct TTYStdinWriter {
+public struct TTYStdinWriter: Sendable {
     internal let channel: Channel
 
     /// Write raw bytes to the TTY's standard input
@@ -119,9 +119,10 @@ final class ExecCommandHandler: ChannelDuplexHandler, Sendable {
     }
     
     func handlerAdded(context: ChannelHandlerContext) {
+        let boundContext = NIOLoopBound(context, eventLoop: context.eventLoop)
         context.channel.setOption(ChannelOptions.allowRemoteHalfClosure, value: true).whenFailure { error in
             self.logger.debug("Failed to set allowRemoteHalfClosure: \(error)")
-            context.fireErrorCaught(error)
+            boundContext.value.fireErrorCaught(error)
         }
     }
 

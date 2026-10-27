@@ -1,12 +1,12 @@
 import NIO
 import NIOSSH
 
-fileprivate final class ProxyChannelHandler: ChannelOutboundHandler {
+fileprivate final class ProxyChannelHandler: ChannelOutboundHandler, Sendable {
     typealias OutboundIn = ByteBuffer
 
-    private let write: (ByteBuffer, EventLoopPromise<Void>?) -> Void
+    private let write: @Sendable (ByteBuffer, EventLoopPromise<Void>?) -> Void
 
-    init(write: @escaping (ByteBuffer, EventLoopPromise<Void>?) -> Void) {
+    init(write: @escaping @Sendable (ByteBuffer, EventLoopPromise<Void>?) -> Void) {
         self.write = write
     }
 
@@ -49,12 +49,12 @@ public struct DirectTCPIPForwardingDelegate: DirectTCPIPDelegate {
                         remote.writeAndFlush(data, promise: promise)
                     })
                 }.flatMap {
-                    remote.pipeline.addHandler(ProxyChannelHandler { [weak channel] data, promise in
-                        guard let channel else {
+                    remote.pipeline.addHandler(ProxyChannelHandler { [weak localChannel = channel] data, promise in
+                        guard let localChannel else {
                             promise?.fail(ChannelError.ioOnClosedChannel)
                             return
                         }
-                        channel.writeAndFlush(data, promise: promise)
+                        localChannel.writeAndFlush(data, promise: promise)
                     })
                 }
             }

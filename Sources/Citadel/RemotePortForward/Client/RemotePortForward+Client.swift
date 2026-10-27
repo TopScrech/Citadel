@@ -84,7 +84,9 @@ extension SSHClient {
                 .listen(host: host, port: port),
                 promise: responsePromise
             )
-            return responsePromise.futureResult
+            return responsePromise.futureResult.map { response in
+                response.map { SSHRemotePortForward(host: host, boundPort: $0.boundPort ?? port) }
+            }
         }.get()
 
         guard let response = response else {
@@ -92,11 +94,11 @@ extension SSHClient {
             throw SSHClientError.channelCreationFailed
         }
 
-        logger.info("Server accepted port forward", metadata: ["bound_port": "\(response.boundPort ?? port)"])
+        logger.info("Server accepted port forward", metadata: ["bound_port": "\(response.boundPort)"])
 
         // Sleep until cancelled
         do {
-            try await onOpen(SSHRemotePortForward(host: host, boundPort: response.boundPort ?? port))
+            try await onOpen(SSHRemotePortForward(host: host, boundPort: response.boundPort))
             while !Task.isCancelled {
                 try await Task.sleep(for: .seconds(100_000))
             }
@@ -165,11 +167,29 @@ extension SSHClient {
     ///   - onAccept: A closure called for each incoming connection with a NIOAsyncChannel.
     /// - Returns: Information about the established port forward, including the actual bound port.
     /// - Throws: If the server rejects the port forwarding request or if the request fails.
+    public func withRemotePortForward(
+        host: String,
+        port: Int,
+        configure: @escaping @Sendable (Channel) -> EventLoopFuture<Void> = { $0.eventLoop.makeSucceededVoidFuture() },
+        onOpen: @escaping @Sendable (SSHRemotePortForward) async throws -> Void = { _ in },
+        onAccept: @escaping @Sendable (NIOAsyncChannel<ByteBuffer, ByteBuffer>) async throws -> Void
+    ) async throws {
+        try await withRemotePortForward(
+            host: host,
+            port: port,
+            inboundType: ByteBuffer.self,
+            outboundType: ByteBuffer.self,
+            configure: configure,
+            onOpen: onOpen,
+            onAccept: onAccept
+        )
+    }
+
     public func withRemotePortForward<Inbound: Sendable, Outbound: Sendable>(
         host: String,
         port: Int,
-        inboundType: Inbound.Type = ByteBuffer.self,
-        outboundType: Outbound.Type = ByteBuffer.self,
+        inboundType: Inbound.Type = Inbound.self,
+        outboundType: Outbound.Type = Outbound.self,
         configure: @escaping @Sendable (Channel) -> EventLoopFuture<Void> = { $0.eventLoop.makeSucceededVoidFuture() },
         onOpen: @escaping @Sendable (SSHRemotePortForward) async throws -> Void = { _ in },
         onAccept: @escaping @Sendable (NIOAsyncChannel<Inbound, Outbound>) async throws -> Void
@@ -258,6 +278,8 @@ extension SSHClient {
         try await withRemotePortForward(
             host: host,
             port: port,
+            inboundType: ByteBuffer.self,
+            outboundType: ByteBuffer.self,
             onOpen: onOpen
          ) { inboundClient in
             let outboundClient = try await ClientBootstrap(group: inboundClient.channel.eventLoop)

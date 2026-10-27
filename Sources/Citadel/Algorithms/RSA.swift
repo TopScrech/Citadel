@@ -164,7 +164,8 @@ extension Insecure.RSA {
         }
     }
     
-    public final class PrivateKey: NIOSSHPrivateKeyProtocol {
+    // Key components are immutable after construction; operations use separate BoringSSL contexts
+    public final class PrivateKey: NIOSSHPrivateKeyProtocol, @unchecked Sendable {
         public static let keyPrefix = "ssh-rsa"
         
         // Private Exponent

@@ -1,4 +1,5 @@
 import NIO
+import NIOConcurrencyHelpers
 import Crypto
 import Logging
 import NIOSSH
@@ -56,12 +57,13 @@ extension SSHAlgorithms.Modification<(NIOSSHPublicKeyProtocol.Type, NIOSSHSignat
     }
 }
 
-public struct SSHAlgorithms: Sendable {
+// Stores algorithm metatypes only, never mutable algorithm instances
+public struct SSHAlgorithms: @unchecked Sendable {
     /// Represents a modification to a list of items.
     ///
     /// - replace: Replaces the existing list of items with the given list of items.
     /// - add: Adds the given list of items to the list of items.
-    public enum Modification<T: Sendable>: Sendable {
+    public enum Modification<T> {
         case replace(with: [T])
         case add([T])
     }
@@ -108,16 +110,31 @@ public struct SSHAlgorithms: Sendable {
     }()
 }
 
+extension SSHAlgorithms.Modification: Sendable where T: Sendable {}
+
 /// Represents an SSH connection.
-public final class SSHClient {
-    private(set) var session: SSHClientSession
-    private var userInitiatedClose = false
-    let authenticationMethod: () -> SSHAuthenticationMethod
+public final class SSHClient: Sendable {
+    private let state: NIOLockedValueBox<SSHClientState>
+    private(set) var session: SSHClientSession {
+        get { state.withLockedValue { $0.session } }
+        set { state.withLockedValue { $0.session = newValue } }
+    }
+    private var userInitiatedClose: Bool {
+        get { state.withLockedValue { $0.userInitiatedClose } }
+        set { state.withLockedValue { $0.userInitiatedClose = newValue } }
+    }
+    let authenticationMethod: @Sendable () -> SSHAuthenticationMethod
     let hostKeyValidator: SSHHostKeyValidator
-    internal var connectionSettings = SSHConnectionPoolSettings()
+    internal var connectionSettings: SSHConnectionPoolSettings {
+        get { state.withLockedValue { $0.connectionSettings } }
+        set { state.withLockedValue { $0.connectionSettings = newValue } }
+    }
     private let algorithms: SSHAlgorithms
     private let protocolOptions: Set<SSHProtocolOption>
-    private var onDisconnect: (@Sendable () -> ())?
+    private var onDisconnect: (@Sendable () -> Void)? {
+        get { state.withLockedValue { $0.onDisconnect } }
+        set { state.withLockedValue { $0.onDisconnect = newValue } }
+    }
     public let logger = Logger(label: "nl.orlandos.citadel.client")
     public var isConnected: Bool {
         session.channel.isActive
@@ -130,12 +147,12 @@ public final class SSHClient {
     
     init(
         session: SSHClientSession,
-        authenticationMethod: @escaping @autoclosure () -> SSHAuthenticationMethod,
+        authenticationMethod: @escaping @Sendable @autoclosure () -> SSHAuthenticationMethod,
         hostKeyValidator: SSHHostKeyValidator,
         algorithms: SSHAlgorithms = SSHAlgorithms(),
         protocolOptions: Set<SSHProtocolOption>
     ) {
-        self.session = session
+        self.state = NIOLockedValueBox(SSHClientState(session: session))
         self.authenticationMethod = authenticationMethod
         self.hostKeyValidator = hostKeyValidator
         self.algorithms = algorithms
@@ -179,11 +196,9 @@ public final class SSHClient {
             settings: settings
         ).get()
         
-        let sshHandler = try await channel.pipeline.handler(type: NIOSSHHandler.self).get()
-        let handshakeHandler = try await channel.pipeline.handler(type: ClientHandshakeHandler.self).get()
-        let session = try await handshakeHandler.authenticated.map {
-            SSHClientSession(channel: channel, inboundChannelHandler: inboundChannelHandler, sshHandler: sshHandler)
-        }.get()
+        let session = try await SSHClientSession.authenticatedSession(
+            on: channel, inboundChannelHandler: inboundChannelHandler
+        ).get()
 
         return SSHClient(
             session: session,
@@ -211,11 +226,9 @@ public final class SSHClient {
             )
         }
         
-        let sshHandler = try await channel.pipeline.handler(type: NIOSSHHandler.self).get()
-        let handshakeHandler = try await channel.pipeline.handler(type: ClientHandshakeHandler.self).get()
-        let session = try await handshakeHandler.authenticated.map {
-            SSHClientSession(channel: channel, inboundChannelHandler: inboundChannelHandler, sshHandler: sshHandler)
-        }.get()
+        let session = try await SSHClientSession.authenticatedSession(
+            on: channel, inboundChannelHandler: inboundChannelHandler
+        ).get()
 
         return SSHClient(
             session: session,
@@ -236,7 +249,7 @@ public final class SSHClient {
     /// - Returns: An SSH client.
     public static func connect(
         on channel: Channel,
-        authenticationMethod: @escaping @autoclosure () -> SSHAuthenticationMethod,
+        authenticationMethod: @escaping @Sendable @autoclosure () -> SSHAuthenticationMethod,
         hostKeyValidator: SSHHostKeyValidator,
         algorithms: SSHAlgorithms = SSHAlgorithms(),
         protocolOptions: Set<SSHProtocolOption> = []
@@ -250,8 +263,9 @@ public final class SSHClient {
             protocolOptions: protocolOptions
         ).get()
         
-        let sshHandler = try await channel.pipeline.handler(type: NIOSSHHandler.self).get()
-        let session = SSHClientSession(channel: channel, inboundChannelHandler: inboundChannelHandler, sshHandler: sshHandler)
+        let session = try await SSHClientSession.authenticatedSession(
+            on: channel, inboundChannelHandler: inboundChannelHandler
+        ).get()
         
         return SSHClient(
             session: session,
@@ -284,7 +298,7 @@ public final class SSHClient {
         algorithms: SSHAlgorithms = SSHAlgorithms(),
         protocolOptions: Set<SSHProtocolOption> = [],
         group: MultiThreadedEventLoopGroup = .singleton,
-        channelHandlers: [ChannelHandler] = [],
+        channelHandlers: [ChannelHandler & Sendable] = [],
         connectTimeout:TimeAmount = .seconds(30)
     ) async throws -> SSHClient {
         let session = try await SSHClientSession.connect(

@@ -12,8 +12,8 @@ let package = Package(
         .library(name: "Citadel", targets: ["Citadel"])
     ],
     dependencies: [
-        // https://github.com/apple/swift-nio-ssh
-        .package(url: "https://github.com/Wellz26/swift-nio-ssh.git", from: "0.15.1"),
+        // https://github.com/Wellz26/swift-nio-ssh
+        .package(url: "https://github.com/Wellz26/swift-nio-ssh", "0.3.7"..<"0.4.0"),
         
         // https://github.com/apple/swift-nio.git
         .package(url: "https://github.com/apple/swift-nio", from: "2.81.0"),

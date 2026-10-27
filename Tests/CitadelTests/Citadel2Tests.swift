@@ -18,9 +18,9 @@ final class Citadel2Tests: XCTestCase {
             func requestReceived(request: NIOSSHUserAuthenticationRequest, responsePromise: EventLoopPromise<NIOSSHUserAuthenticationOutcome>) {
                 switch request.request {
                 case .password(.init(password: password)):
-                    responsePromise.succeed(.success)
+                    responsePromise.assumeIsolated().succeed(.success)
                 default:
-                    responsePromise.succeed(.failure)
+                    responsePromise.assumeIsolated().succeed(.failure)
                 }
             }
         }
@@ -178,13 +178,13 @@ final class Citadel2Tests: XCTestCase {
             func requestReceived(request: NIOSSH.NIOSSHUserAuthenticationRequest, responsePromise: NIOCore.EventLoopPromise<NIOSSH.NIOSSHUserAuthenticationOutcome>) {
                 switch request.request {
                 case .hostBased, .none, .password:
-                    return responsePromise.succeed(.failure)
+                    return responsePromise.assumeIsolated().succeed(.failure)
                 case .publicKey(let key):
                     guard key.publicKey == supportedKey else {
-                        return responsePromise.succeed(.failure)
+                        return responsePromise.assumeIsolated().succeed(.failure)
                     }
                     
-                    responsePromise.succeed(.success)
+                    responsePromise.assumeIsolated().succeed(.success)
                 }
             }
         }

@@ -41,16 +41,16 @@
  * wise caller could do; we just do it for you.
  */
 
-#define BCRYPT_WORDS 8
-#define BCRYPT_HASHSIZE (BCRYPT_WORDS * 4)
+#define BCRYPT_KDF_WORDS 8
+#define BCRYPT_KDF_HASHSIZE (BCRYPT_KDF_WORDS * 4)
 
 static void
 bcrypt_hash(uint8_t *sha2pass, uint8_t *sha2salt, uint8_t *out)
 {
     blf_ctx state;
-    uint8_t ciphertext[BCRYPT_HASHSIZE] =
+    uint8_t ciphertext[BCRYPT_KDF_HASHSIZE] =
     "OxychromaticBlowfishSwatDynamite";
-    uint32_t cdata[BCRYPT_WORDS];
+    uint32_t cdata[BCRYPT_KDF_WORDS];
     int i;
     uint16_t j;
     size_t shalen = SHA512_DIGEST_LENGTH;
@@ -65,13 +65,13 @@ bcrypt_hash(uint8_t *sha2pass, uint8_t *sha2salt, uint8_t *out)
     
     /* encryption */
     j = 0;
-    for (i = 0; i < BCRYPT_WORDS; i++)
+    for (i = 0; i < BCRYPT_KDF_WORDS; i++)
             cdata[i] = citadel_Blowfish_stream2word(ciphertext, sizeof(ciphertext), &j);
     for (i = 0; i < 64; i++)
-            citadel_blf_enc(&state, cdata, BCRYPT_WORDS / 2);
+            citadel_blf_enc(&state, cdata, BCRYPT_KDF_WORDS / 2);
     
     /* copy out */
-    for (i = 0; i < BCRYPT_WORDS; i++) {
+    for (i = 0; i < BCRYPT_KDF_WORDS; i++) {
         out[4 * i + 3] = (cdata[i] >> 24) & 0xff;
         out[4 * i + 2] = (cdata[i] >> 16) & 0xff;
         out[4 * i + 1] = (cdata[i] >> 8) & 0xff;
@@ -90,8 +90,8 @@ citadel_bcrypt_pbkdf(const unsigned char *pass, size_t passlen, const uint8_t *s
 {
     uint8_t sha2pass[SHA512_DIGEST_LENGTH];
     uint8_t sha2salt[SHA512_DIGEST_LENGTH];
-    uint8_t out[BCRYPT_HASHSIZE];
-    uint8_t tmpout[BCRYPT_HASHSIZE];
+    uint8_t out[BCRYPT_KDF_HASHSIZE];
+    uint8_t tmpout[BCRYPT_KDF_HASHSIZE];
     uint8_t *countsalt;
     size_t i, j, amt, stride;
     uint32_t count;

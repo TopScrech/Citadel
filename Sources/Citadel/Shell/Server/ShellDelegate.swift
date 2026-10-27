@@ -2,7 +2,7 @@ import NIO
 import NIOSSH
 import Logging
 
-public enum ShellClientEvent {
+public enum ShellClientEvent: Sendable {
     case stdin(ByteBuffer)
 }
 
@@ -10,7 +10,7 @@ public struct ShellServerEvent: Sendable {
     internal enum Event {
         case stdout(ByteBuffer)
     }
-    
+
     let event: Event
 
     public static func stdout(_ data: ByteBuffer) -> ShellServerEvent {
@@ -32,19 +32,19 @@ public struct ShellOutboundWriter: Sendable {
     public func write(_ string: String) {
         write(ByteBuffer(string: string))
     }
-    
+
     public func write(_ data: [UInt8]) {
         write(ByteBuffer(bytes: data))
     }
-    
+
     public func write(_ data: ByteBuffer) {
         continuation.yield(.stdout(data))
     }
 }
 
-final class ShellServerInboundHandler: ChannelInboundHandler {
+final class ShellServerInboundHandler: ChannelInboundHandler, Sendable {
     typealias InboundIn = ByteBuffer
-    
+
     let logger: Logger
     let delegate: ShellDelegate
     let username: String?
@@ -52,14 +52,14 @@ final class ShellServerInboundHandler: ChannelInboundHandler {
     let inbound = AsyncStream<ShellClientEvent>.makeStream()
     let outbound = AsyncThrowingStream<ShellServerEvent, Error>.makeStream()
     let windowSize = AsyncStream<SSHShellContext.WindowSize>.makeStream()
-    
+
     init(logger: Logger, delegate: ShellDelegate, eventLoop: EventLoop, username: String?) {
         self.logger = logger
         self.delegate = delegate
         self.username = username
         self.eventLoop = eventLoop
     }
-    
+
     func handlerAdded(context: ChannelHandlerContext) {
         let channel = context.channel
 
@@ -99,13 +99,14 @@ final class ShellServerInboundHandler: ChannelInboundHandler {
             }
         }
 
-        done.futureResult.whenFailure(context.fireErrorCaught)
+        let boundContext = NIOLoopBound(context, eventLoop: context.eventLoop)
+        done.futureResult.whenFailure { boundContext.value.fireErrorCaught($0) }
     }
-    
+
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         inbound.continuation.yield(.stdin(unwrapInboundIn(data)))
     }
-    
+
     func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
         switch event {
         case let event as SSHChannelRequestEvent.WindowChangeRequest:
@@ -123,18 +124,20 @@ enum ShellServerSubsystem {
         logger: Logger,
         username: String?
     ) -> EventLoopFuture<Void> {
-        let shellInboundHandler = ShellServerInboundHandler(
-            logger: logger,
-            delegate: shell,
-            eventLoop: channel.eventLoop,
-            username: username
-        )
-        
-        return channel.pipeline.addHandlers(
-            SSHChannelDataUnwrapper(),
-            SSHOutboundChannelDataWrapper(),
-            shellInboundHandler,
-            CloseErrorHandler(logger: logger)
-        )
+        channel.eventLoop.submit {
+            let shellInboundHandler = ShellServerInboundHandler(
+                logger: logger,
+                delegate: shell,
+                eventLoop: channel.eventLoop,
+                username: username
+            )
+
+            try channel.pipeline.syncOperations.addHandlers(
+                SSHChannelDataUnwrapper(),
+                SSHOutboundChannelDataWrapper(),
+                shellInboundHandler,
+                CloseErrorHandler(logger: logger)
+            )
+        }
     }
 }

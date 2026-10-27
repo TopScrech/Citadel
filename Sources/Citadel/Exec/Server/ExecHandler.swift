@@ -12,7 +12,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-import Dispatch
 import Foundation
 import NIOCore
 import NIOFoundationCompat
@@ -56,40 +55,47 @@ final class ExecHandler: ChannelDuplexHandler {
     let username: String?
     
     func handlerAdded(context: ChannelHandlerContext) {
+        let boundContext = NIOLoopBound(context, eventLoop: context.eventLoop)
         context.channel.setOption(ChannelOptions.allowRemoteHalfClosure, value: true).whenFailure { error in
-            context.fireErrorCaught(error)
+            boundContext.value.fireErrorCaught(error)
         }
     }
     
     func channelInactive(context: ChannelHandlerContext) {
-        Task {
-            try await self.context?.terminate()
-            self.context = nil
-            self.pipeChannel = nil
-        }
+        let commandContext = self.context
+        self.context = nil
+        self.pipeChannel = nil
+        let termination = context.eventLoop.makePromise(of: Void.self)
+        termination.completeWithTask { try await commandContext?.terminate() }
+        termination.futureResult.whenFailure { _ in }
         context.fireChannelInactive()
     }
     
     func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+        let channel = context.channel
+        let boundContext = NIOLoopBound(context, eventLoop: context.eventLoop)
         switch event {
         case let event as SSHChannelRequestEvent.ExecRequest:
             if let delegate = delegate {
                 self.exec(event, delegate: delegate, channel: context.channel)
             } else if event.wantReply {
                 context.channel.triggerUserOutboundEvent(ChannelFailureEvent()).whenComplete { _ in
-                    context.channel.close(promise: nil)
+                    channel.close(promise: nil)
                 }
             }
         case let event as SSHChannelRequestEvent.EnvironmentRequest:
             if let delegate = delegate {
-                Task {
-                    try await delegate.setEnvironmentValue(event.value, forKey: event.name)
-                }
+                let value = event.value
+                let name = event.name
+                let update = context.eventLoop.makePromise(of: Void.self)
+                update.completeWithTask { try await delegate.setEnvironmentValue(value, forKey: name) }
+                update.futureResult.whenFailure { boundContext.value.fireErrorCaught($0) }
             }
         case ChannelEvent.inputClosed:
-            Task {
-                try await self.context?.inputClosed()
-            }
+            let commandContext = self.context
+            let close = context.eventLoop.makePromise(of: Void.self)
+            close.completeWithTask { try await commandContext?.inputClosed() }
+            close.futureResult.whenFailure { boundContext.value.fireErrorCaught($0) }
         default:
             context.fireUserInboundEventTriggered(event)
         }
@@ -104,11 +110,14 @@ final class ExecHandler: ChannelDuplexHandler {
     }
     
     private func exec(_ event: SSHChannelRequestEvent.ExecRequest, delegate: ExecDelegate, channel: Channel) {
+        let boundSelf = NIOLoopBound(self, eventLoop: channel.eventLoop)
+        let command = event.command
+        let wantReply = event.wantReply
         let successPromise = channel.eventLoop.makePromise(of: Int.self)
         let handler = ExecOutputHandler(username: username) { code in
             successPromise.succeed(code)
         } onFailure: { _ in
-            if event.wantReply {
+            if wantReply {
                 channel.triggerUserOutboundEvent(ChannelFailureEvent()).whenComplete { _ in
                     channel.close(promise: nil)
                 }
@@ -118,6 +127,7 @@ final class ExecHandler: ChannelDuplexHandler {
         }
         
         let (ours, theirs) = GlueHandler.matchedPair()
+        let boundTheirs = NIOLoopBound(theirs, eventLoop: channel.eventLoop)
         
         // Ok, great, we've sorted stdout and stdin. For stderr we need a different strategy: we just park a thread for this.
         let stderrHandle = handler.stderrPipe.fileHandleForReading
@@ -135,31 +145,34 @@ final class ExecHandler: ChannelDuplexHandler {
             }
         }
         
-        channel.pipeline.addHandler(ours).flatMap {
+        channel.eventLoop.makeCompletedFuture {
+            try channel.pipeline.syncOperations.addHandler(ours)
+        }.flatMap {
             NIOPipeBootstrap(group: channel.eventLoop)
                 .channelOption(ChannelOptions.allowRemoteHalfClosure, value: true)
                 .channelInitializer { pipeChannel in
-                    pipeChannel.pipeline.addHandlers(SSHInboundChannelDataWrapper(), SSHOutboundChannelDataUnwrapper(), theirs)
-                }.withPipes(
-                    inputDescriptor: dup(handler.stdoutPipe.fileHandleForReading.fileDescriptor),
-                    outputDescriptor: dup(handler.stdinPipe.fileHandleForWriting.fileDescriptor)
+                    pipeChannel.eventLoop.makeCompletedFuture {
+                        try pipeChannel.pipeline.syncOperations.addHandlers(SSHInboundChannelDataWrapper(), SSHOutboundChannelDataUnwrapper(), boundTheirs.value)
+                    }
+                }.takingOwnershipOfDescriptors(
+                    input: dup(handler.stdoutPipe.fileHandleForReading.fileDescriptor),
+                    output: dup(handler.stdinPipe.fileHandleForWriting.fileDescriptor)
                 )
         }.flatMap { pipeChannel -> EventLoopFuture<Channel> in
-            self.pipeChannel = pipeChannel
-            let start = channel.eventLoop.makePromise(of: Void.self)
+            boundSelf.value.pipeChannel = pipeChannel
+            let start = channel.eventLoop.makePromise(of: ExecCommandContext.self)
             start.completeWithTask {
                 do {
-                    self.context = try await delegate.start(
-                        command: event.command,
-                        outputHandler: handler
-                    )
+                    return try await delegate.start(command: command, outputHandler: handler)
                 } catch {
-                    try await pipeChannel.close(mode: .all)
+                    try? await pipeChannel.close(mode: .all)
+                    throw error
                 }
             }
-            
-            return start.futureResult.flatMap {
-                if event.wantReply {
+
+            return start.futureResult.flatMap { commandContext in
+                boundSelf.value.context = commandContext
+                if wantReply {
                     return channel.triggerUserOutboundEvent(ChannelSuccessEvent()).map {
                         pipeChannel
                     }
@@ -178,7 +191,7 @@ final class ExecHandler: ChannelDuplexHandler {
             case .success:
                 channel.close(promise: nil)
             case .failure:
-                if event.wantReply {
+                if wantReply {
                     channel.triggerUserOutboundEvent(ChannelFailureEvent()).whenComplete { _ in
                         channel.close(promise: nil)
                     }

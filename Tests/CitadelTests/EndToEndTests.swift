@@ -55,9 +55,9 @@ final class EndToEndTests: XCTestCase {
         let authDelegate = AuthDelegate(supportedAuthenticationMethods: .password) { request, promise in
             switch request.request {
             case .password(.init(password: "test")) where request.username == "citadel":
-                promise.succeed(.success)
+                promise.assumeIsolated().succeed(.success)
             default:
-                promise.succeed(.failure)
+                promise.assumeIsolated().succeed(.failure)
             }
         }
         let server = try await SSHServer.host(
